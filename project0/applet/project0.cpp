@@ -47,17 +47,19 @@ byte digitSequence[] = {
   0x71 //f = aefg  = 10001110 = 01110001
 }; 
 
-//only works for 0-9 for now, can use A, b, C, D, E F to display other info.
-int base = 16;
-
-//the digit to show
-int number = 0;
-
-long lastButtonChange, lastEvent;
-long buttonIdle, buttonDelay = 50;
+//only works for 0-9 for now, cld use A, b, C, D, E F to display other info.
+int base = 10;
 
 boolean buttonCircuit,lastButtonCircuit;
+
+long circuitIdle, circuitDebounce = 50;
+long lastCircuitChange;
+
 boolean buttonDown,lastButtonDown;
+
+long lastButtonChange, buttonHoldPeriod;
+
+long lastEvent;
 
 Tone tone;
 boolean alarm;
@@ -66,7 +68,10 @@ long lastTone;
 int OPERATION_MODE = 0;
 int CONFIGURATION_MODE = 1;
 
-int mode = OPERATION_MODE;
+int mode = CONFIGURATION_MODE;
+
+//the digit to show
+int number = -1;
 
 void setup(){
   //configure pins in correct modes
@@ -85,48 +90,58 @@ void setup(){
 
 void loop(){
   
-  //read button state with debounce
+  //read button state and record change
   buttonCircuit = digitalRead(buttonPin) == HIGH;
   if(buttonCircuit != lastButtonCircuit){
-    lastButtonChange = millis();
+    lastCircuitChange = millis();
   }
   lastButtonCircuit = buttonCircuit;
-  buttonIdle = millis() - lastButtonChange;
-  if( buttonIdle > buttonDelay){
-    buttonDown = buttonCircuit;
+  
+  //set button debounced
+  circuitIdle = millis() - lastCircuitChange;
+  if( circuitIdle > circuitDebounce){
+    if(buttonDown != buttonCircuit){
+      buttonDown = buttonCircuit;
+      buttonHoldPeriod = millis() - lastButtonChange;
+      lastButtonChange = millis();
+    }
   }
 
-  //use buttons to control countdown digit  
-  if(!buttonDown && lastButtonDown){
-    countUp();
-  }
+  if( (!buttonDown) && (buttonDown != lastButtonDown)){ //button released
+    if(buttonHoldPeriod > 1000){//long period switches mode 
+      mode = CONFIGURATION_MODE;
+      number = -1;
+    }
+    else{ //short period triggers increment
+      countUp();      
+    }
+  }  
   lastButtonDown = buttonDown;
 
-  int seconds = (millis() / 1000);
-  if(buttonIdle > 10000){
-    mode = OPERATION_MODE;
+  if(circuitIdle > 1000){ //use idle time to switch into operational mode if a number was incremented
+    if(number >= 0){
+      mode = OPERATION_MODE;
+    }
   }
-  else{
-    mode = CONFIGURATION_MODE;
-  }
-
   
   if(mode == OPERATION_MODE){
     //trigger a countdown if appropriate
     if(popEvent()){
       countDown();
     }
-    if(number == 1){
+    if(number < 2){
       soundAlarm();
     }
     else{
       silenceAlarm();
     }
   }
+  if(mode == CONFIGURATION_MODE){
+    silenceAlarm();
+  }
   
   //show the countdown
   displayDigit(number);
-
 
   serviceAlarm();
   
@@ -134,23 +149,30 @@ void loop(){
 
 /** Displays the specified digit. */
 void displayDigit(int digit){
-
+  
+  byte segments;
+  
   if(digit >= 0 && digit < (2 * base)){
-    //work out remainder (unit digit) and digital point (tens digit)
-    boolean dp = digit >= base;
-    int hex = digit % base;
-    //write the digit
-    for(int bitidx=0;bitidx<numDisplayPins -1;bitidx++){
-      digitalWrite(displayPins[bitidx], (digitSequence[hex] & (0x01 << bitidx)?HIGH:LOW));
-    }
-    //write the decimal point
-    digitalWrite(5, (dp?HIGH:LOW));
+    //write the tens into the decimal point
+    digitalWrite(5, (digit >= base?HIGH:LOW));
+    //choose segments for the unit digit
+    segments = digitSequence[digit % base];
+  }
+  else if(digit == -1){
+    //turn off all segments
+    segments = 0x0;
   }
   else{
-    Serial.print("digit = ");
+    Serial.print("Digit was ");
     Serial.print(digit);
-    Serial.println("; cannot be displayed");                         
+    Serial.println(" and cannot be written");
   }
+
+  //write the digit
+  for(int bitidx=0;bitidx<numDisplayPins -1;bitidx++){
+    digitalWrite(displayPins[bitidx], (segments & (0x01 << bitidx)?HIGH:LOW));
+  }
+
 }
 
 void countUp(){
@@ -165,7 +187,7 @@ void countDown(){
 
 /** Has the thing we've been monitoring for happened at least once? */
 boolean popEvent(){
-  if(millis() - lastEvent > 10000){
+  if(millis() - lastEvent > 3000){
     lastEvent = millis();
     return true;
   }
